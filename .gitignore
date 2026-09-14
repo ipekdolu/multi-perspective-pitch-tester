@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.env
+node_modules/
+dist/

@@ -20,7 +20,10 @@ from __future__ import annotations
 import argparse
 import json
 
+from dotenv import load_dotenv
 from langgraph.types import Command
+
+load_dotenv()
 
 from app.graph.build import compiled_graph
 

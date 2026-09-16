@@ -1,16 +1,25 @@
 """Node functions for the pitch-tester graph.
 
-Phase 1: every node uses stub logic (no LLM calls). The point of this
-phase is to prove the graph SHAPE and the interrupt/resume mechanism,
-not persona quality — that's Phase 2.
+Phase 1 proved the graph shape with stub (non-LLM) logic. Phase 2 replaces
+the two persona-facing nodes (persona_reaction, challenge_and_rebuttal)
+with real Claude calls; intake and synthesis stay as they were — the doc
+only calls for real personas in this phase.
 """
 
 from __future__ import annotations
 
+import os
+
+from langchain_anthropic import ChatAnthropic
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import END
 from langgraph.types import Command, Send, interrupt
+from pydantic import BaseModel, Field
+from typing import Literal
 
 from app.graph.state import PitchTesterState
+
+MODEL_NAME = os.environ.get("PITCH_TESTER_MODEL", "claude-opus-5")
 
 STUB_PERSONAS = [
     {
@@ -36,17 +45,48 @@ STUB_PERSONAS = [
     },
 ]
 
-STUB_REACTIONS = {
-    "investor": "Market size claim is unverified - what's the comparable exit multiple?",
-    "customer": "This solves a real pain point, but the switching cost from our current tool looks high.",
-    "regulator": "The data-handling claim needs a named legal basis before I'd sign off.",
-}
 
-STUB_REBUTTALS = {
-    "investor": "held",
-    "customer": "conceded",
-    "regulator": "held",
-}
+class RebuttalDecision(BaseModel):
+    """Structured output for a persona's hold/concede decision.
+
+    Forcing this through structured output (rather than parsing free
+    text) is what makes `outcome` reliable enough to double as the
+    eval golden-trace format called out later in the doc.
+    """
+
+    outcome: Literal["held", "conceded"] = Field(
+        description="'held' if the persona's original point still stands "
+        "against this challenge, 'conceded' if the challenge genuinely "
+        "changes their position."
+    )
+    response_text: str = Field(
+        description="The persona's in-character rebuttal or concession, "
+        "2-4 sentences, staying strictly within their stated incentive."
+    )
+
+
+def _persona_system_prompt(persona: dict) -> str:
+    return (
+        f"{persona['system_prompt']}\n\n"
+        f"Your incentive: {persona['incentive_statement']}\n\n"
+        "Stay strictly within this incentive framing. Do not soften your "
+        "position out of politeness — react the way this persona actually "
+        "would, including genuine skepticism or disagreement."
+    )
+
+
+def _extract_text(content) -> str:
+    """Claude Opus 5 runs extended thinking by default, so message content
+    comes back as a list of blocks (a `thinking` block plus one or more
+    `text` blocks) rather than a plain string. Pull out just the text.
+    """
+    if isinstance(content, str):
+        return content
+    return "".join(
+        block.get("text", "")
+        for block in content
+        if isinstance(block, dict) and block.get("type") == "text"
+    )
 
 
 def intake(state: PitchTesterState) -> dict:
@@ -84,17 +124,31 @@ def route_to_personas(state: PitchTesterState) -> list[Send]:
 
 
 def persona_reaction(state: PitchTesterState) -> dict:
-    """Stub persona reaction. One invocation per persona (via Send fan-out).
+    """Real persona reaction. One invocation per persona (via Send fan-out).
 
     Reads `_active_persona`, injected by route_to_personas — not part of
     the permanent schema, just the payload for this one Send branch.
     """
     persona = state["_active_persona"]
     persona_id = persona["id"]
-    reaction_text = STUB_REACTIONS[persona_id]
+
+    llm = ChatAnthropic(model=MODEL_NAME)
+    pitch_text = " ".join(state["pitch"]["claims"])
+    response = llm.invoke(
+        [
+            SystemMessage(content=_persona_system_prompt(persona)),
+            HumanMessage(
+                content=f"Here is the pitch:\n\n{pitch_text}\n\n"
+                "Give your first reaction in 2-4 sentences."
+            ),
+        ]
+    )
+
     return {
         "persona_threads": {
-            persona_id: [{"role": "persona", "content": reaction_text}]
+            persona_id: [
+                {"role": "persona", "content": _extract_text(response.content)}
+            ]
         }
     }
 
@@ -127,19 +181,41 @@ def present_findings(state: PitchTesterState) -> Command:
 
 
 def challenge_and_rebuttal(state: PitchTesterState) -> dict:
-    """Stub challenge/rebuttal: routes the challenge to the target
-    persona's own thread and appends a canned hold/concede response.
-
-    Real version (Phase 2+) replaces STUB_REBUTTALS with an LLM call
-    that reads the persona's full thread (including this challenge)
-    before deciding hold vs. concede.
+    """Real challenge/rebuttal: replays the persona's full thread (its
+    original reaction plus any prior challenge rounds) as message
+    history, then asks the model to genuinely decide hold vs. concede
+    against this specific challenge — via structured output, not a
+    hardcoded lookup.
     """
     persona_id = state["pending_challenge_persona_id"]
     challenge_text = state["pending_challenge_text"]
-    outcome = STUB_REBUTTALS[persona_id]
-    response_text = (
-        f"[stub {outcome}] responding to: {challenge_text}"
+    persona = next(p for p in state["personas"] if p["id"] == persona_id)
+
+    history = []
+    for msg in state["persona_threads"].get(persona_id, []):
+        if msg["role"] == "persona":
+            history.append(AIMessage(content=msg["content"]))
+        else:
+            history.append(HumanMessage(content=msg["content"]))
+
+    llm = ChatAnthropic(model=MODEL_NAME).with_structured_output(RebuttalDecision)
+    decision: RebuttalDecision = llm.invoke(
+        [
+            SystemMessage(
+                content=_persona_system_prompt(persona)
+                + "\n\nYou are being challenged on your prior reaction. Decide "
+                "honestly: does this specific challenge change your position "
+                "('conceded'), or does your original point still stand "
+                "('held')? Do not concede reflexively to be agreeable, and "
+                "do not hold reflexively out of stubbornness — the decision "
+                "must be earned by the strength of the challenge."
+            ),
+            *history,
+            HumanMessage(content=challenge_text),
+        ]
     )
+    outcome = decision.outcome
+    response_text = decision.response_text
 
     return {
         "persona_threads": {

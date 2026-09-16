@@ -17,6 +17,7 @@ class PersonaConfig(TypedDict):
     name: str
     role: str
     incentive_statement: str
+    evaluation_criteria: list[str]
     system_prompt: str
 
 
@@ -63,7 +64,11 @@ class PitchTesterState(TypedDict):
     raw_pitch: str
 
     pitch: StructuredPitch
-    personas: list[PersonaConfig]
+    # Phase 3: each persona_reaction branch fetches its own profile from
+    # the MCP resource and contributes it here — operator.add because all
+    # three parallel Send() branches write to this key in the same
+    # superstep; a plain (unreduced) field would conflict.
+    personas: Annotated[list[PersonaConfig], operator.add]
     persona_threads: Annotated[dict[str, list[Message]], merge_threads]
     challenge_log: Annotated[list[ChallengeLogEntry], operator.add]
     round_count: int
@@ -77,5 +82,7 @@ class PitchTesterState(TypedDict):
     pending_challenge_text: str | None
 
     # Set only on the per-branch copy of state a Send() carries into
-    # persona_reaction; absent on the "main" state everywhere else.
-    _active_persona: PersonaConfig
+    # persona_reaction; absent on the "main" state everywhere else. Just
+    # a routing id — persona_reaction fetches the actual profile from
+    # the MCP resource, it doesn't come from the graph itself.
+    _persona_id: str

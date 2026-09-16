@@ -1,9 +1,13 @@
 """Node functions for the pitch-tester graph.
 
-Phase 1 proved the graph shape with stub (non-LLM) logic. Phase 2 replaces
-the two persona-facing nodes (persona_reaction, challenge_and_rebuttal)
-with real Claude calls; intake and synthesis stay as they were — the doc
-only calls for real personas in this phase.
+Phase 1 proved the graph shape with stub (non-LLM) logic. Phase 2 wired
+in real Claude calls with incentive prompts hardcoded. Phase 3 removes
+that hardcoding: persona_reaction and challenge_and_rebuttal now act as
+MCP clients to the standalone persona-research server (mcp_server/) —
+fetching each persona's incentive profile from the
+persona_incentive_profile:// resource and grounding reactions in live
+get_market_context search results, instead of a literal dict in this
+file.
 """
 
 from __future__ import annotations
@@ -17,33 +21,19 @@ from langgraph.types import Command, Send, interrupt
 from pydantic import BaseModel, Field
 from typing import Literal
 
+from app.graph.mcp_client import (
+    fetch_market_context,
+    fetch_persona_profile,
+    log_challenge_outcome,
+)
 from app.graph.state import PitchTesterState
 
 MODEL_NAME = os.environ.get("PITCH_TESTER_MODEL", "claude-opus-5")
 
-STUB_PERSONAS = [
-    {
-        "id": "investor",
-        "name": "Investor",
-        "role": "investor",
-        "incentive_statement": "Wants outsized financial return within a fund's time horizon; skeptical of unproven markets.",
-        "system_prompt": "You are an investor persona. React from a pure ROI/risk lens.",
-    },
-    {
-        "id": "customer",
-        "name": "Customer",
-        "role": "customer",
-        "incentive_statement": "Wants a real problem solved with minimal switching cost; skeptical of unproven products.",
-        "system_prompt": "You are a customer persona. React from a pure usefulness/adoption-friction lens.",
-    },
-    {
-        "id": "regulator",
-        "name": "Regulator",
-        "role": "regulator",
-        "incentive_statement": "Wants compliance and harm prevention; skeptical of unvetted claims.",
-        "system_prompt": "You are a regulator persona. React from a pure compliance/risk-to-public lens.",
-    },
-]
+# Structural routing info only (which personas this app fans out to) —
+# not the incentive/eval data the doc calls out to move off hardcoding.
+# That data now lives behind the MCP resource, fetched per branch below.
+PERSONA_IDS = ["investor", "customer", "regulator"]
 
 
 class RebuttalDecision(BaseModel):
@@ -65,14 +55,21 @@ class RebuttalDecision(BaseModel):
     )
 
 
-def _persona_system_prompt(persona: dict) -> str:
-    return (
+def _persona_system_prompt(persona: dict, market_context: str | None = None) -> str:
+    prompt = (
         f"{persona['system_prompt']}\n\n"
         f"Your incentive: {persona['incentive_statement']}\n\n"
+        f"What you evaluate against: {'; '.join(persona['evaluation_criteria'])}\n\n"
         "Stay strictly within this incentive framing. Do not soften your "
         "position out of politeness — react the way this persona actually "
         "would, including genuine skepticism or disagreement."
     )
+    if market_context:
+        prompt += (
+            "\n\nReal-world signal to ground your reaction in (weigh it, "
+            f"don't just repeat it):\n{market_context}"
+        )
+    return prompt
 
 
 def _extract_text(content) -> str:
@@ -101,7 +98,7 @@ def intake(state: PitchTesterState) -> dict:
             "target_market": "unspecified (stub)",
             "ask": "unspecified (stub)",
         },
-        "personas": STUB_PERSONAS,
+        "personas": [],
         "persona_threads": {},
         "challenge_log": [],
         "round_count": 0,
@@ -113,30 +110,35 @@ def intake(state: PitchTesterState) -> dict:
 def route_to_personas(state: PitchTesterState) -> list[Send]:
     """Fan-out edge: dispatches one Send per persona to persona_reaction.
 
-    This is the LangGraph `Send` API referenced in the design doc —
-    each Send carries its own copy of the persona config so the
-    parallel branches don't need to share mutable state mid-flight.
+    Each Send carries only a persona id — persona_reaction fetches the
+    actual profile from the MCP resource itself, so this routing step
+    doesn't need to know anything about incentives or prompts.
     """
     return [
-        Send("persona_reaction", {**state, "_active_persona": persona})
-        for persona in state["personas"]
+        Send("persona_reaction", {**state, "_persona_id": persona_id})
+        for persona_id in PERSONA_IDS
     ]
 
 
 def persona_reaction(state: PitchTesterState) -> dict:
     """Real persona reaction. One invocation per persona (via Send fan-out).
 
-    Reads `_active_persona`, injected by route_to_personas — not part of
-    the permanent schema, just the payload for this one Send branch.
+    Acts as an MCP client twice before generating a reaction: reads its
+    own incentive profile from persona_incentive_profile://{id}, and
+    calls get_market_context to ground the reaction in live signal
+    instead of the model's own guesswork.
     """
-    persona = state["_active_persona"]
-    persona_id = persona["id"]
+    persona_id = state["_persona_id"]
+    persona = fetch_persona_profile(persona_id)
+    pitch_text = " ".join(state["pitch"]["claims"])
+    market_context = fetch_market_context(
+        topic=pitch_text, persona_role=persona["role"]
+    )
 
     llm = ChatAnthropic(model=MODEL_NAME)
-    pitch_text = " ".join(state["pitch"]["claims"])
     response = llm.invoke(
         [
-            SystemMessage(content=_persona_system_prompt(persona)),
+            SystemMessage(content=_persona_system_prompt(persona, market_context)),
             HumanMessage(
                 content=f"Here is the pitch:\n\n{pitch_text}\n\n"
                 "Give your first reaction in 2-4 sentences."
@@ -145,11 +147,12 @@ def persona_reaction(state: PitchTesterState) -> dict:
     )
 
     return {
+        "personas": [persona],
         "persona_threads": {
             persona_id: [
                 {"role": "persona", "content": _extract_text(response.content)}
             ]
-        }
+        },
     }
 
 
@@ -216,6 +219,10 @@ def challenge_and_rebuttal(state: PitchTesterState) -> dict:
     )
     outcome = decision.outcome
     response_text = decision.response_text
+
+    # Server-side audit trail, independent of LangGraph's own checkpoint —
+    # separate from the challenge_log field returned below.
+    log_challenge_outcome(persona_id, challenge_text, outcome)
 
     return {
         "persona_threads": {

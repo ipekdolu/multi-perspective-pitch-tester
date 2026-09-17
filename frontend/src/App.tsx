@@ -34,10 +34,13 @@ function App() {
 
   return (
     <div className="app">
-      <h1>Multi-perspective pitch tester</h1>
+      <div className="app-header">
+        <h1>Multi-perspective pitch tester</h1>
+        <p>Investor, customer, and regulator personas react to your pitch -- independently.</p>
+      </div>
 
       {!run && (
-        <div className="start-section">
+        <div className="card start-section">
           <textarea
             placeholder="Describe your pitch..."
             value={pitch}

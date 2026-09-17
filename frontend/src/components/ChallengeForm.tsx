@@ -18,7 +18,8 @@ export function ChallengeForm({ personaIds, onChallenge, onDone, busy }: Props) 
   };
 
   return (
-    <div className="challenge-section">
+    <div className="card challenge-section">
+      <p className="section-label">Challenge a persona</p>
       <div className="challenge-row">
         <select value={personaId} onChange={(e) => setPersonaId(e.target.value)} disabled={busy}>
           {personaIds.map((id) => (
@@ -29,16 +30,16 @@ export function ChallengeForm({ personaIds, onChallenge, onDone, busy }: Props) 
         </select>
         <input
           type="text"
-          placeholder="Challenge text..."
+          placeholder="Push back on their reaction..."
           value={text}
           onChange={(e) => setText(e.target.value)}
           disabled={busy}
         />
         <button onClick={submit} disabled={busy}>
-          Send challenge
+          Send
         </button>
       </div>
-      <button onClick={onDone} disabled={busy}>
+      <button className="secondary" onClick={onDone} disabled={busy}>
         Done challenging
       </button>
     </div>

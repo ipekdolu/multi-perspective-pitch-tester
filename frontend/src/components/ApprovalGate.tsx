@@ -6,11 +6,12 @@ interface Props {
 
 export function ApprovalGate({ onApprove, onReject, busy }: Props) {
   return (
-    <div className="approval-section">
+    <div className="card approval-section">
+      <p className="section-label">Ready to synthesize?</p>
       <button onClick={onApprove} disabled={busy}>
         Approve
       </button>
-      <button onClick={onReject} disabled={busy}>
+      <button className="secondary" onClick={onReject} disabled={busy}>
         Reject (another round)
       </button>
     </div>

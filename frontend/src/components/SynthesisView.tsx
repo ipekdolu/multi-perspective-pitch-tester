@@ -2,7 +2,7 @@ import type { Synthesis } from "../types";
 
 export function SynthesisView({ synthesis }: { synthesis: Synthesis }) {
   return (
-    <div className="synthesis-section">
+    <div className="card synthesis-section">
       <h3>Synthesis</h3>
       <div className="synthesis-block">
         <h4>Agreement</h4>

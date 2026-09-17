@@ -10,6 +10,11 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
+      # server.py's default (127.0.0.1) is only right for local dev --
+      # without this, Render's port scanner can't see the service since
+      # it only listens on localhost inside the container.
+      - key: MCP_SERVER_HOST
+        value: 0.0.0.0
 
   - name: pitch-tester-backend
     type: web

@@ -7,6 +7,11 @@ services:
     rootDir: mcp_server
     buildCommand: pip install -r requirements.txt
     startCommand: python server.py
+    # Render's default health check pings "/", but this server only
+    # serves "/sse" (see sse_path in server.py) -- without this the
+    # deploy hangs "In progress" forever waiting for a response that
+    # never comes.
+    healthCheckPath: /sse
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9

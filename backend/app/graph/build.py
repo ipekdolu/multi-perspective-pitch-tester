@@ -25,6 +25,8 @@ from app.graph.nodes import (
 )
 from app.graph.state import PitchTesterState
 
+DEFAULT_DB_PATH = "pitch_tester_checkpoints.sqlite"
+
 
 def build_graph_definition() -> StateGraph:
     graph = StateGraph(PitchTesterState)
@@ -49,7 +51,7 @@ def build_graph_definition() -> StateGraph:
 
 
 @contextmanager
-def compiled_graph(db_path: str = "pitch_tester_checkpoints.sqlite"):
+def compiled_graph(db_path: str = DEFAULT_DB_PATH):
     """Context-managed compiled graph bound to a SQLite checkpointer.
 
     Must be used as a `with` block: SqliteSaver.from_conn_string holds the

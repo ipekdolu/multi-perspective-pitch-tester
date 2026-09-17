@@ -25,9 +25,8 @@ from langgraph.types import Command
 
 load_dotenv()
 
+from app.graph.build import DEFAULT_DB_PATH as DB_PATH
 from app.graph.build import compiled_graph
-
-DB_PATH = "pitch_tester_checkpoints.sqlite"
 
 
 def _print_state_summary(state) -> None:

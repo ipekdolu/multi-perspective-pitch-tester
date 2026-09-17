@@ -4,16 +4,15 @@ Thin layer: each endpoint is the HTTP equivalent of one of main.py's CLI
 subcommands, reusing the same compiled_graph() (SQLite-checkpointed) so
 behavior matches what Phases 1-4 already proved works. This exists
 because Phase 5 needs the human approval gate operable from a UI rather
-than the CLI — this is the backend that minimal UI talks to.
+than the CLI -- the React frontend (Phase 6) is what talks to it now.
 
-Run: python -m app.api  (serves http://127.0.0.1:8000, UI at /)
+Run: python -m app.api  (serves http://127.0.0.1:8000)
 """
 
 from __future__ import annotations
 
 import os
 import uuid
-from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -21,22 +20,18 @@ load_dotenv()
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from langgraph.types import Command
 from pydantic import BaseModel
 
+from app.graph.build import DEFAULT_DB_PATH as DB_PATH
 from app.graph.build import compiled_graph
 from app.langfuse_online import get_callbacks, make_trace_id, maybe_score_run
 
-DB_PATH = "pitch_tester_checkpoints.sqlite"
-STATIC_DIR = Path(__file__).parent / "static"
-
 app = FastAPI(title="pitch-tester")
 
-# The React frontend (Phase 6, separate origin -- Vite dev server locally,
-# Vercel once deployed) calls this API cross-origin. The static/index.html
-# minimal UI from Phase 5 doesn't need this (same-origin), but leaving CORS
-# off would silently break every fetch call from the React app.
+# The React frontend (separate origin -- Vite dev server locally, Vercel
+# once deployed) calls this API cross-origin -- leaving CORS off would
+# silently break every fetch call from it.
 _default_origins = "http://localhost:5173,http://127.0.0.1:5173"
 app.add_middleware(
     CORSMiddleware,
@@ -157,9 +152,6 @@ def reject_run(thread_id: str) -> dict:
         state = graph.get_state(config)
     maybe_score_run(trace_id, state.values)
     return _serialize_state(thread_id, state)
-
-
-app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
 
 
 if __name__ == "__main__":

@@ -151,6 +151,12 @@ def persona_reaction(state: PitchTesterState) -> dict:
     market_context = fetch_market_context(
         topic=pitch_text, persona_role=persona["role"]
     )
+    # get_market_context degrades to a "Market context unavailable (...)"
+    # string rather than raising (see mcp_server/server.py) -- that's a
+    # signal to us that search failed, not real-world content, so don't
+    # feed it into the prompt as if it were grounding signal.
+    if market_context.startswith("Market context unavailable"):
+        market_context = None
 
     llm = ChatAnthropic(model=MODEL_NAME)
     response = llm.invoke(
@@ -209,7 +215,9 @@ def challenge_and_rebuttal(state: PitchTesterState) -> dict:
     """
     persona_id = state["pending_challenge_persona_id"]
     challenge_text = state["pending_challenge_text"]
-    persona = next(p for p in state["personas"] if p["id"] == persona_id)
+    persona = next((p for p in state["personas"] if p["id"] == persona_id), None)
+    if persona is None:
+        raise ValueError(f"No persona found for id {persona_id!r}")
 
     history = []
     for msg in state["persona_threads"].get(persona_id, []):

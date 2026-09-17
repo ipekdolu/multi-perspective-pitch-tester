@@ -24,6 +24,7 @@ from langgraph.types import Command
 from pydantic import BaseModel
 
 from app.graph.build import compiled_graph
+from app.langfuse_online import get_callbacks, make_trace_id, maybe_score_run
 
 DB_PATH = "pitch_tester_checkpoints.sqlite"
 STATIC_DIR = Path(__file__).parent / "static"
@@ -38,6 +39,21 @@ class StartRequest(BaseModel):
 class ChallengeRequest(BaseModel):
     persona_id: str
     text: str
+
+
+def _config(thread_id: str) -> tuple[dict, str | None]:
+    """Graph invoke config, with Langfuse callbacks attached to a trace
+    seeded from thread_id -- a no-op callbacks list if Langfuse isn't
+    configured (see langfuse_online.py). Returns (config, trace_id);
+    trace_id is returned separately (not embedded in config) since
+    LangGraph's RunnableConfig isn't a free-form dict for extra keys.
+    """
+    trace_id = make_trace_id(thread_id)
+    config = {
+        "configurable": {"thread_id": thread_id},
+        "callbacks": get_callbacks(trace_id),
+    }
+    return config, trace_id
 
 
 def _serialize_state(thread_id: str, state) -> dict:
@@ -62,16 +78,17 @@ def _serialize_state(thread_id: str, state) -> dict:
 @app.post("/runs")
 def start_run(req: StartRequest) -> dict:
     thread_id = uuid.uuid4().hex[:12]
-    config = {"configurable": {"thread_id": thread_id}}
+    config, trace_id = _config(thread_id)
     with compiled_graph(DB_PATH) as graph:
         graph.invoke({"raw_pitch": req.pitch}, config=config)
         state = graph.get_state(config)
+    maybe_score_run(trace_id, state.values)
     return _serialize_state(thread_id, state)
 
 
 @app.get("/runs/{thread_id}")
 def get_run(thread_id: str) -> dict:
-    config = {"configurable": {"thread_id": thread_id}}
+    config, _ = _config(thread_id)
     with compiled_graph(DB_PATH) as graph:
         state = graph.get_state(config)
     if not state.values:
@@ -81,7 +98,7 @@ def get_run(thread_id: str) -> dict:
 
 @app.post("/runs/{thread_id}/challenge")
 def challenge_run(thread_id: str, req: ChallengeRequest) -> dict:
-    config = {"configurable": {"thread_id": thread_id}}
+    config, trace_id = _config(thread_id)
     with compiled_graph(DB_PATH) as graph:
         graph.invoke(
             Command(
@@ -94,33 +111,37 @@ def challenge_run(thread_id: str, req: ChallengeRequest) -> dict:
             config=config,
         )
         state = graph.get_state(config)
+    maybe_score_run(trace_id, state.values)
     return _serialize_state(thread_id, state)
 
 
 @app.post("/runs/{thread_id}/done")
 def done_run(thread_id: str) -> dict:
-    config = {"configurable": {"thread_id": thread_id}}
+    config, trace_id = _config(thread_id)
     with compiled_graph(DB_PATH) as graph:
         graph.invoke(Command(resume={"action": "done"}), config=config)
         state = graph.get_state(config)
+    maybe_score_run(trace_id, state.values)
     return _serialize_state(thread_id, state)
 
 
 @app.post("/runs/{thread_id}/approve")
 def approve_run(thread_id: str) -> dict:
-    config = {"configurable": {"thread_id": thread_id}}
+    config, trace_id = _config(thread_id)
     with compiled_graph(DB_PATH) as graph:
         graph.invoke(Command(resume={"decision": "approved"}), config=config)
         state = graph.get_state(config)
+    maybe_score_run(trace_id, state.values)
     return _serialize_state(thread_id, state)
 
 
 @app.post("/runs/{thread_id}/reject")
 def reject_run(thread_id: str) -> dict:
-    config = {"configurable": {"thread_id": thread_id}}
+    config, trace_id = _config(thread_id)
     with compiled_graph(DB_PATH) as graph:
         graph.invoke(Command(resume={"decision": "rejected"}), config=config)
         state = graph.get_state(config)
+    maybe_score_run(trace_id, state.values)
     return _serialize_state(thread_id, state)
 
 

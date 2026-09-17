@@ -75,17 +75,27 @@ async def get_market_context(topic: str, persona_role: str) -> str:
     framing = PERSONA_SEARCH_FRAMING.get(persona_role, "")
     query = f"{topic} {framing}".strip()
 
-    server_params = StdioServerParameters(command=_duckduckgo_command(), args=[])
-    async with stdio_client(server_params) as (read, write):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            result = await session.call_tool(
-                "search", {"query": query, "max_results": 5}
-            )
-            text_parts = [
-                block.text for block in result.content if hasattr(block, "text")
-            ]
-            return "\n".join(text_parts) if text_parts else "No market context found."
+    # duckduckgo-mcp-server is a third-party subprocess dependency -- if
+    # its environment isn't set up right (e.g. missing browser binaries
+    # in a constrained container), it can die hard enough to take this
+    # whole SSE session down with it. An external search failing
+    # shouldn't crash the persona-research server, so degrade instead.
+    try:
+        server_params = StdioServerParameters(command=_duckduckgo_command(), args=[])
+        async with stdio_client(server_params) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                result = await session.call_tool(
+                    "search", {"query": query, "max_results": 5}
+                )
+                text_parts = [
+                    block.text for block in result.content if hasattr(block, "text")
+                ]
+                return (
+                    "\n".join(text_parts) if text_parts else "No market context found."
+                )
+    except Exception as exc:
+        return f"Market context unavailable ({exc.__class__.__name__})."
 
 
 @mcp.tool()

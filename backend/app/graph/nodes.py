@@ -16,7 +16,6 @@ import os
 
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-from langgraph.graph import END
 from langgraph.types import Command, Send, interrupt
 from pydantic import BaseModel, Field
 from typing import Literal
@@ -27,6 +26,7 @@ from app.graph.mcp_client import (
     log_challenge_outcome,
 )
 from app.graph.state import PitchTesterState
+from app.llm_utils import invoke_structured
 
 MODEL_NAME = os.environ.get("PITCH_TESTER_MODEL", "claude-opus-5")
 
@@ -52,6 +52,23 @@ class RebuttalDecision(BaseModel):
     response_text: str = Field(
         description="The persona's in-character rebuttal or concession, "
         "2-4 sentences, staying strictly within their stated incentive."
+    )
+
+
+class SynthesisOutput(BaseModel):
+    """Structured output for the synthesis node."""
+
+    agreement: list[str] = Field(
+        description="Real points where multiple personas actually "
+        "converge, drawn from what they said — not generic positivity."
+    )
+    divergence: list[str] = Field(
+        description="Real points where personas land in genuinely "
+        "different places, naming which persona holds which position."
+    )
+    biggest_risk: str = Field(
+        description="The single most significant risk raised anywhere "
+        "in the transcript, in one or two sentences."
     )
 
 
@@ -202,7 +219,8 @@ def challenge_and_rebuttal(state: PitchTesterState) -> dict:
             history.append(HumanMessage(content=msg["content"]))
 
     llm = ChatAnthropic(model=MODEL_NAME).with_structured_output(RebuttalDecision)
-    decision: RebuttalDecision = llm.invoke(
+    decision: RebuttalDecision = invoke_structured(
+        llm,
         [
             SystemMessage(
                 content=_persona_system_prompt(persona)
@@ -266,15 +284,48 @@ def human_approval_gate(state: PitchTesterState) -> Command:
 
 
 def synthesis(state: PitchTesterState) -> dict:
-    """Stub synthesis: derives agreement/divergence/risk directly from
-    the challenge log rather than calling an LLM.
+    """Real synthesis: reads the full transcript — every persona's
+    initial reaction plus every challenge/rebuttal exchange, not just
+    challenge_log outcomes — and extracts genuine agreement, genuine
+    divergence, and the single biggest risk.
+
+    The Phase 1-3 stub version derived this purely from challenge_log,
+    which structurally can't see anything from the personas' initial
+    reactions (e.g. shared enthusiasm or shared concern that was never
+    challenged). Phase 4's eval surfaced that as a permanently-floored
+    synthesis_quality score against the golden references — this
+    replaces it with what the architecture doc always described: a
+    node that reads the full transcript.
     """
-    held = [c for c in state["challenge_log"] if c["outcome"] == "held"]
-    conceded = [c for c in state["challenge_log"] if c["outcome"] == "conceded"]
-    return {
-        "synthesis": {
-            "agreement": [f"{c['persona_id']} conceded" for c in conceded],
-            "divergence": [f"{c['persona_id']} held" for c in held],
-            "biggest_risk": held[0]["challenge_text"] if held else "none identified (stub)",
-        }
-    }
+    transcript_parts = []
+    for persona in state["personas"]:
+        thread = state["persona_threads"].get(persona["id"], [])
+        thread_text = "\n".join(f"  [{m['role']}] {m['content']}" for m in thread)
+        transcript_parts.append(
+            f"=== {persona['name']} ({persona['role']}) ===\n{thread_text}"
+        )
+    transcript = "\n\n".join(transcript_parts)
+
+    llm = ChatAnthropic(model=MODEL_NAME).with_structured_output(SynthesisOutput)
+    result: SynthesisOutput = invoke_structured(
+        llm,
+        [
+            SystemMessage(
+                content=(
+                    "You are synthesizing a multi-perspective pitch review. "
+                    "Read the full transcript below — every persona's "
+                    "initial reaction and every challenge/rebuttal exchange "
+                    "— and extract: (1) real agreement across personas "
+                    "(only things multiple personas actually converge on, "
+                    "not vague positivity), (2) real divergence (where "
+                    "personas genuinely land in different places, and "
+                    "why), and (3) the single biggest risk raised anywhere "
+                    "in the transcript. Be concrete and specific, grounded "
+                    "in what was actually said."
+                )
+            ),
+            HumanMessage(content=transcript),
+        ]
+    )
+
+    return {"synthesis": result.model_dump()}

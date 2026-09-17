@@ -11,3 +11,4 @@ node_modules/
 dist/
 challenge_audit.jsonl
 pitch-tester-claude-code-prompt.md
+eval_results.json

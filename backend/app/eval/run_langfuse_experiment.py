@@ -23,6 +23,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Eval-only budget override, same reasoning as run_eval.py: personas run
+# on a cheaper model here, the real app still defaults to claude-opus-5.
+# Must happen before app.graph.nodes is imported anywhere (including
+# transitively via harness/build).
+EVAL_PERSONA_MODEL = os.environ.get("EVAL_PERSONA_MODEL", "claude-sonnet-5")
+os.environ["PITCH_TESTER_MODEL"] = EVAL_PERSONA_MODEL
+
 from langfuse import Evaluation, get_client
 
 from app.eval.golden_dataset import GOLDEN_CASES

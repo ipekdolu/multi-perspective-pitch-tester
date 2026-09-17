@@ -11,6 +11,7 @@ Run: python -m app.api  (serves http://127.0.0.1:8000, UI at /)
 
 from __future__ import annotations
 
+import os
 import uuid
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from langgraph.types import Command
 from pydantic import BaseModel
@@ -30,6 +32,18 @@ DB_PATH = "pitch_tester_checkpoints.sqlite"
 STATIC_DIR = Path(__file__).parent / "static"
 
 app = FastAPI(title="pitch-tester")
+
+# The React frontend (Phase 6, separate origin -- Vite dev server locally,
+# Vercel once deployed) calls this API cross-origin. The static/index.html
+# minimal UI from Phase 5 doesn't need this (same-origin), but leaving CORS
+# off would silently break every fetch call from the React app.
+_default_origins = "http://localhost:5173,http://127.0.0.1:5173"
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=os.environ.get("CORS_ALLOWED_ORIGINS", _default_origins).split(","),
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 class StartRequest(BaseModel):

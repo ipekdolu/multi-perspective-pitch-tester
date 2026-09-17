@@ -1,0 +1,49 @@
+services:
+  - name: pitch-tester-mcp
+    type: web
+    runtime: python
+    region: oregon
+    plan: free
+    rootDir: mcp_server
+    buildCommand: pip install -r requirements.txt
+    startCommand: python server.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+
+  - name: pitch-tester-backend
+    type: web
+    runtime: python
+    region: oregon
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -e .
+    startCommand: uvicorn app.api:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      # Deliberately cheaper than the local default (claude-opus-5) --
+      # this instance is reachable by anyone with the URL, so it
+      # shouldn't default to the most expensive model. Override in the
+      # Render dashboard if you want opus-5 quality for a specific demo.
+      - key: PITCH_TESTER_MODEL
+        value: claude-sonnet-5
+      # Update this to match pitch-tester-mcp's actual assigned URL
+      # after it first deploys (Render *should* follow <name>.onrender.com,
+      # but confirm in the dashboard rather than assume).
+      - key: MCP_SERVER_URL
+        value: https://pitch-tester-mcp.onrender.com/sse
+      - key: LANGFUSE_PUBLIC_KEY
+        sync: false
+      - key: LANGFUSE_SECRET_KEY
+        sync: false
+      - key: LANGFUSE_HOST
+        value: https://cloud.langfuse.com
+      - key: LANGFUSE_ONLINE_SAMPLE_RATE
+        value: "0.2"
+      # Set to the deployed Vercel frontend URL once that's live --
+      # left blank/manual since it doesn't exist until after Vercel deploy.
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false

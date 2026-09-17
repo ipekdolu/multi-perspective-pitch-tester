@@ -21,6 +21,7 @@ looks unfamiliar).
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -97,4 +98,8 @@ def log_challenge_outcome(persona_id: str, challenge: str, outcome: str) -> str:
 
 
 if __name__ == "__main__":
-    mcp.run(transport="sse", host="127.0.0.1", port=8765, sse_path="/sse")
+    # 0.0.0.0/$PORT for Render (or any host requiring a bound public
+    # interface); defaults match local dev unchanged.
+    host = os.environ.get("MCP_SERVER_HOST", "127.0.0.1")
+    port = int(os.environ.get("PORT", "8765"))
+    mcp.run(transport="sse", host=host, port=port, sse_path="/sse")
